@@ -14,12 +14,12 @@
 -dontobfuscate
 
 # WebView JavaScript interfaces
--keepclassmembers class com.metrolist.music.utils.potoken.PoTokenWebView {
+-keepclassmembers class com.monologue.music.utils.potoken.PoTokenWebView {
     @android.webkit.JavascriptInterface public *;
 }
 
 # Keep PO-token utility classes
--keep class com.metrolist.music.utils.potoken.** { *; }
+-keep class com.monologue.music.utils.potoken.** { *; }
 
 # Keep coroutine continuation for WebView callbacks
 -keepclassmembers class * {
@@ -130,11 +130,11 @@
 
 ## Queue Persistence Rules
 # Keep queue-related classes to prevent serialization issues in release builds
--keep class com.metrolist.music.models.PersistQueue { *; }
--keep class com.metrolist.music.models.PersistPlayerState { *; }
--keep class com.metrolist.music.models.QueueData { *; }
--keep class com.metrolist.music.models.QueueType { *; }
--keep class com.metrolist.music.playback.queues.** { *; }
+-keep class com.monologue.music.models.PersistQueue { *; }
+-keep class com.monologue.music.models.PersistPlayerState { *; }
+-keep class com.monologue.music.models.QueueData { *; }
+-keep class com.monologue.music.models.QueueType { *; }
+-keep class com.monologue.music.playback.queues.** { *; }
 
 # Keep serialization methods for queue persistence
 -keepclassmembers class * implements java.io.Serializable {
@@ -148,7 +148,7 @@
 -keep interface com.yalantis.ucrop** { *; }
 
 ## Google Cast Rules
--keep class com.metrolist.music.cast.** { *; }
+-keep class com.monologue.music.cast.** { *; }
 -keep class com.google.android.gms.cast.** { *; }
 -keep class androidx.mediarouter.** { *; }
 
@@ -156,8 +156,8 @@
 -dontwarn com.google.re2j.**
 
 # Vibra fingerprint library
--keep class com.metrolist.music.recognition.VibraSignature { *; }
--keepclassmembers class com.metrolist.music.recognition.VibraSignature {
+-keep class com.monologue.music.recognition.VibraSignature { *; }
+-keepclassmembers class com.monologue.music.recognition.VibraSignature {
     native <methods>;
 }
 
@@ -172,26 +172,26 @@
 -dontwarn io.ktor.**
 
 ## Listen Together Protobuf
--keep class com.metrolist.music.listentogether.proto.** { *; }
--keepclassmembers class com.metrolist.music.listentogether.proto.** { *; }
+-keep class com.monologue.music.listentogether.proto.** { *; }
+-keepclassmembers class com.monologue.music.listentogether.proto.** { *; }
 
 ## Shazam Models
--keep class com.metrolist.shazamkit.models.** { *; }
--keepclassmembers class com.metrolist.shazamkit.models.** {
+-keep class com.monologue.shazamkit.models.** { *; }
+-keepclassmembers class com.monologue.shazamkit.models.** {
     *;
 }
 
 ## Discord RPC JNI
--keep class com.metrolist.music.discord.DiscordRpcManager { *; }
--keepclassmembers class com.metrolist.music.discord.DiscordRpcManager {
+-keep class com.monologue.music.discord.DiscordRpcManager { *; }
+-keepclassmembers class com.monologue.music.discord.DiscordRpcManager {
     native <methods>;
 }
 
 ## Kotlinx Serialization
 -keepattributes *Annotation*
--keepclassmembers class com.metrolist.shazamkit.models.** {
+-keepclassmembers class com.monologue.shazamkit.models.** {
     *** Companion;
 }
--keepclasseswithmembers class com.metrolist.shazamkit.models.** {
+-keepclasseswithmembers class com.monologue.shazamkit.models.** {
     kotlinx.serialization.KSerializer serializer(...);
 }

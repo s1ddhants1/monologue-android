@@ -37,6 +37,6 @@ dependencyResolutionManagement {
 }
 
 // F-Droid doesn't support foojay-resolver plugin
-rootProject.name = "Metrolist"
+rootProject.name = "Monologue"
 include(":app")
 include(":innertube")

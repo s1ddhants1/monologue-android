@@ -1,14 +1,32 @@
-# Working with Metrolist as an AI agent
+# Working with Monologue as an AI agent
 
-Metrolist is a 3rd party YouTube Music client written in Kotlin. It follows material 3 design guidelines closely.
+Monologue is an audiobook client written in Kotlin forked from Metrolist to suit our needs. It follows material 3 design guidelines closely.
+
+# Building on top of Metrolist
+
+The metrolist code and ui is the highest level of quality possible and is to be used as a reference for the highest quality possible for an app of this kind, no code ai or human could ever write from scratch could ever match this level of quality without significant effort and time. Therefore keep the ui as much as possible the same as metrolist, change it minimally and surgically to adapt it to our purpose so that upstream changes can be tracked and merged for relevant improvements.
+
+Allowed changes:
+
+1. reusing and repurposing of existing ui to fit the changes required for audiobooks
+2. changing the branding to our own including launcher icon etc
+3. changing the app, project, and build related names and identifiers to our own
+4. changing metrolist references to monologue references
+5. changing music related strings and logic to audiobook related ones
+
+Forbidden changes:
+
+1. creating new ui/pages/screens from scratch
+2. changing the structure and design of the app
+3. writing code that would make it harder to merge upstream changes from metrolist
+4. writing code that isn't coherent with the existing codebase
 
 ## Rules for working on the project
 
 1. Always pull the latest changes from `main` before starting your work to minimize merge conflicts.
 2. Commit names should be clear and follow the format: `type(scope): short description`. For example: `feat(ui): add dark mode support`. Including the scope is optional.
-3. All string edits should be made to the `Metrolist/app/src/main/res/values/metrolist_strings.xml` file, NOT `Metrolist/app/src/main/res/values/strings.xml`. Do not touch other `strings.xml` or `metrolist_strings.xml` files in the project. ONLY edit the default (English) `metrolist_strings.xml` file, DO NOT EDIT OTHER LANGUAGES.
+3. All string edits should be made to the `Monologue/app/src/main/res/values/monologue_strings.xml` file, NOT `Monologue/app/src/main/res/values/strings.xml`. Do not touch other `strings.xml` or `monologue_strings.xml` files in the project. ONLY edit the default (English) `monologue_strings.xml` file, DO NOT EDIT OTHER LANGUAGES.
 4. You are to follow best practices for Kotlin and Android development.
-5. DO NOT EDIT THE APP'S DATABASE SCHEMA UNLESS ABSOLUTELY NECESSARY.
 
 ## AI-only guidelines
 

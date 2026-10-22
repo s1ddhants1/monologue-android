@@ -1,4 +1,4 @@
-package com.metrolist.music.ui.component
+package com.monologue.music.ui.component
 
 import android.content.Context
 import android.os.Bundle
@@ -27,10 +27,10 @@ import androidx.mediarouter.app.MediaRouteControllerDialog
 import androidx.mediarouter.app.MediaRouteControllerDialogFragment
 import androidx.mediarouter.app.MediaRouteDialogFactory
 import com.google.android.gms.cast.framework.CastButtonFactory
-import com.metrolist.music.LocalPlayerConnection
-import com.metrolist.music.R
-import com.metrolist.music.constants.EnableGoogleCastKey
-import com.metrolist.music.utils.rememberPreference
+import com.monologue.music.LocalPlayerConnection
+import com.monologue.music.R
+import com.monologue.music.constants.EnableGoogleCastKey
+import com.monologue.music.utils.rememberPreference
 
 @Composable
 fun CastButton(

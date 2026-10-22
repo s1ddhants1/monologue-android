@@ -7,19 +7,19 @@ if (localPropertiesFile.exists()) {
     localProperties.load(localPropertiesFile.inputStream())
 }
 
-val baseApplicationId = "com.metrolist.music"
-val applicationIdOverride = System.getenv("METROLIST_APPLICATION_ID")?.takeIf { it.isNotBlank() }
-val appNameOverride = System.getenv("METROLIST_APP_NAME")?.takeIf { it.isNotBlank() }
+val baseApplicationId = "com.monologue.music"
+val applicationIdOverride = System.getenv("MONOLOGUE_APPLICATION_ID")?.takeIf { it.isNotBlank() }
+val appNameOverride = System.getenv("MONOLOGUE_APP_NAME")?.takeIf { it.isNotBlank() }
 val buildCommit =
-    System.getenv("METROLIST_BUILD_COMMIT")
+    System.getenv("MONOLOGUE_BUILD_COMMIT")
         ?.trim()
         ?.takeIf { it.matches(Regex("[0-9a-fA-F]{7,40}")) }
         ?.take(7)
         ?.lowercase()
-val debugKeystorePathOverride = System.getenv("METROLIST_DEBUG_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
-val debugKeystorePassword = System.getenv("METROLIST_DEBUG_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() } ?: "android"
-val debugKeyAlias = System.getenv("METROLIST_DEBUG_KEY_ALIAS")?.takeIf { it.isNotBlank() } ?: "androiddebugkey"
-val debugKeyPassword = System.getenv("METROLIST_DEBUG_KEY_PASSWORD")?.takeIf { it.isNotBlank() } ?: "android"
+val debugKeystorePathOverride = System.getenv("MONOLOGUE_DEBUG_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
+val debugKeystorePassword = System.getenv("MONOLOGUE_DEBUG_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() } ?: "android"
+val debugKeyAlias = System.getenv("MONOLOGUE_DEBUG_KEY_ALIAS")?.takeIf { it.isNotBlank() } ?: "androiddebugkey"
+val debugKeyPassword = System.getenv("MONOLOGUE_DEBUG_KEY_PASSWORD")?.takeIf { it.isNotBlank() } ?: "android"
 val persistentDebugKeystoreFile = file("persistent-debug.keystore")
 val workflowDebugKeystoreFile = debugKeystorePathOverride?.let(::file)
 
@@ -33,7 +33,7 @@ plugins {
 }
 
 android {
-    namespace = "com.metrolist.music"
+    namespace = "com.monologue.music"
     compileSdk = 37
 
     defaultConfig {
@@ -45,7 +45,7 @@ android {
         val baseVersionName = requireNotNull(versionName)
         buildConfigField("String", "BASE_VERSION_NAME", "\"$baseVersionName\"")
         buildCommit?.let { versionName = "$baseVersionName+$it" }
-        resValue("string", "app_name", appNameOverride ?: "Metrolist")
+        resValue("string", "app_name", appNameOverride ?: "Monologue")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -133,7 +133,7 @@ android {
             }
             isDebuggable = true
             if (appNameOverride == null) {
-                resValue("string", "app_name", "Metrolist Debug")
+                resValue("string", "app_name", "Monologue")
             }
             signingConfig =
                 if (workflowDebugKeystoreFile != null) {
@@ -220,7 +220,7 @@ protobuf {
 }
 
 val cleanLegacyProtoSources = tasks.register<Delete>("cleanLegacyProtoSources") {
-    delete(layout.projectDirectory.dir("src/main/java/com/metrolist/music/listentogether/proto"))
+    delete(layout.projectDirectory.dir("src/main/java/com/monologue/music/listentogether/proto"))
 }
 
 tasks.named("preBuild") {
@@ -310,6 +310,16 @@ dependencies {
     // Protobuf for message serialization (lite version for Android)
     implementation(libs.protobuf.javalite)
     implementation(libs.protobuf.kotlin.lite)
+
+    // Torrent streaming engine (same as LibreTorrent)
+    implementation(libs.libtorrent4j)
+    implementation(libs.libtorrent4j.android.arm64)
+    implementation(libs.libtorrent4j.android.arm)
+    implementation(libs.libtorrent4j.android.x86)
+    implementation(libs.libtorrent4j.android.x64)
+
+    // HTML parsing for AudioBookBay scraper
+    implementation(libs.jsoup)
 
     coreLibraryDesugaring(libs.desugaring)
 

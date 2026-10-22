@@ -71,9 +71,9 @@ jobs:
         run: ./gradlew --console=plain assembleGmsDebug --warning-mode summary
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-          METROLIST_APPLICATION_ID: com.metrolist.music.pr.p${{ github.event.number }}
-          METROLIST_APP_NAME: Metrolist PR ${{ github.event.number }}
-          METROLIST_DEBUG_KEYSTORE_PATH: pr-debug.keystore
+          MONOLOGUE_APPLICATION_ID: com.monologue.music.pr.p${{ github.event.number }}
+          MONOLOGUE_APP_NAME: Metrolist PR ${{ github.event.number }}
+          MONOLOGUE_DEBUG_KEYSTORE_PATH: pr-debug.keystore
           PULL_REQUEST: "true"
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}

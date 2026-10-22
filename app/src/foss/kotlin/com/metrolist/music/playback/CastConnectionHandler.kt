@@ -1,7 +1,7 @@
-package com.metrolist.music.playback
+package com.monologue.music.playback
 
 import android.content.Context
-import com.metrolist.music.models.MediaMetadata
+import com.monologue.music.models.MediaMetadata
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

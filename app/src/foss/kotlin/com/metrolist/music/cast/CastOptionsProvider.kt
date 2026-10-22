@@ -1,4 +1,4 @@
-package com.metrolist.music.cast
+package com.monologue.music.cast
 
 /**
  * Stub CastOptionsProvider for F-Droid builds.

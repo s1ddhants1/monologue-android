@@ -1,4 +1,4 @@
-package com.metrolist.music.playback
+package com.monologue.music.playback
 
 import android.content.Context
 import android.net.Uri
@@ -11,8 +11,8 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import com.google.android.gms.cast.framework.CastContext
-import com.metrolist.music.extensions.metadata
-import com.metrolist.music.ui.utils.resize
+import com.monologue.music.extensions.metadata
+import com.monologue.music.ui.utils.resize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -23,7 +23,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import kotlin.math.roundToInt
-import com.metrolist.music.models.MediaMetadata as AppMediaMetadata
+import com.monologue.music.models.MediaMetadata as AppMediaMetadata
 
 @UnstableApi
 class CastConnectionHandler(

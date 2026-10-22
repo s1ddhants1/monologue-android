@@ -34,6 +34,8 @@ kuromojiIpadic = "0.9.0"
 innertubex = "v0.10.0"
 tinypinyin = "2.0.3"
 protobuf = "4.36.2"
+libtorrent4j = "2.1.0-35"
+jsoup = "1.18.3"
 
 [libraries]
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
@@ -107,6 +109,13 @@ tinypinyin = { module = "com.github.promeG:tinypinyin", version.ref = "tinypinyi
 
 protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf" }
 protobuf-kotlin-lite = { module = "com.google.protobuf:protobuf-kotlin-lite", version.ref = "protobuf" }
+
+libtorrent4j = { module = "org.libtorrent4j:libtorrent4j", version.ref = "libtorrent4j" }
+libtorrent4j-android-arm64 = { module = "org.libtorrent4j:libtorrent4j-android-arm64", version.ref = "libtorrent4j" }
+libtorrent4j-android-arm = { module = "org.libtorrent4j:libtorrent4j-android-arm", version.ref = "libtorrent4j" }
+libtorrent4j-android-x86 = { module = "org.libtorrent4j:libtorrent4j-android-x86", version.ref = "libtorrent4j" }
+libtorrent4j-android-x64 = { module = "org.libtorrent4j:libtorrent4j-android-x86_64", version.ref = "libtorrent4j" }
+jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 
 [plugins]
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

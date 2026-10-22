@@ -178,9 +178,21 @@ jobs:
       - name: Restore Persistent Keystore
         env:
           DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
-        if: env.DEBUG_KEYSTORE != ''
         run: |
-          echo "$DEBUG_KEYSTORE" | base64 -d > ./app/persistent-debug.keystore
+          if [ -n "$DEBUG_KEYSTORE" ]; then
+            echo "$DEBUG_KEYSTORE" | base64 -d > ./app/persistent-debug.keystore
+          else
+            echo "Generating persistent debug keystore for workflow runner..."
+            keytool -genkeypair -v \
+              -keystore ./app/persistent-debug.keystore \
+              -alias androiddebugkey \
+              -keypass android \
+              -storepass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
 
       - name: Build Debug APK
         run: ./gradlew --console=plain assembleGmsDebug --warning-mode summary

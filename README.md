@@ -8,9 +8,10 @@
 
 <br/>
 
-[![Latest release](https://img.shields.io/github/v/release/s1ddhants1/monologue?style=for-the-badge&labelColor=0d1117)](https://github.com/s1ddhants1/monologue/releases)
-[![License](https://img.shields.io/github/license/s1ddhants1/monologue?style=for-the-badge&labelColor=0d1117)](https://github.com/s1ddhants1/monologue/blob/main/LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/s1ddhants1/monologue/total?style=for-the-badge&labelColor=0d1117)](https://github.com/s1ddhants1/monologue/releases)
+[![Latest release](https://img.shields.io/github/v/release/s1ddhants1/monologue-android?style=for-the-badge&labelColor=0d1117)](https://github.com/s1ddhants1/monologue-android/releases)
+<a href="https://github.com/s1ddhants1/monologue-android/releases/tag/nightly"><img src="https://img.shields.io/badge/Nightly-Pre--release-f43f5e?style=for-the-badge&logo=github" alt="Nightly Build" /></a>
+[![License](https://img.shields.io/github/license/s1ddhants1/monologue-android?style=for-the-badge&labelColor=0d1117)](https://github.com/s1ddhants1/monologue-android/blob/main/LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/s1ddhants1/monologue-android/total?style=for-the-badge&labelColor=0d1117)](https://github.com/s1ddhants1/monologue-android/releases)
 
 <br/>
 
@@ -170,8 +171,8 @@
   </tr>
   <tr>
     <td align="center">
-      <a href="https://github.com/MetrolistGroup/Metrolist/releases/download/nightly/Metrolist-with-Google-Cast.apk">
-        <img src="assets/badges/github-nightly.svg" alt="Get the Metrolist nightly build on GitHub" height="120">
+      <a href="https://github.com/s1ddhants1/monologue-android/releases/download/nightly/Monologue-Nightly.apk">
+        <img src="assets/badges/github-nightly.svg" alt="Get the Monologue nightly build on GitHub" height="120">
       </a>
     </td>
   </tr>

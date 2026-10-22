@@ -3,9 +3,6 @@ name: Build APKs
 on:
   workflow_dispatch:
   push:
-    # Feature branches are covered by "Build PR". Building them here too added
-    # four more APK builds on top of it for every push. Use workflow_dispatch
-    # when a branch needs nightly artifacts.
     branches: ["main"]
     paths-ignore:
       - "README.md"
@@ -17,7 +14,6 @@ on:
 
 permissions:
   contents: write
-  discussions: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,21 +21,10 @@ concurrency:
 
 jobs:
   build_release:
-    name: Build Release (${{ matrix.variant }})
+    name: Build Release APK
     if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-
-    strategy:
-      matrix:
-        include:
-          # FOSS and Izzy differ from GMS only by ~80 lines of Cast stubs,
-          # plus the updater flag for Izzy (GMS and FOSS enable the updater,
-          # Izzy disables it). Both are still built by the release workflow,
-          # so building them nightly too doubled this workflow for almost no
-          # extra coverage.
-          - variant: gms
-            variantName: Gms
 
     steps:
       - uses: actions/checkout@v7
@@ -60,59 +45,117 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Release APK
-        run: ./gradlew --console=plain assemble${{ matrix.variantName }}Release --warning-mode summary
+        run: ./gradlew --console=plain assembleGmsRelease --warning-mode summary
         env:
           MONOLOGUE_APPLICATION_ID: com.monologue.music
-          MONOLOGUE_APP_NAME: Metrolist Nightly
+          MONOLOGUE_APP_NAME: Monologue Nightly
           MONOLOGUE_BUILD_COMMIT: ${{ github.sha }}
+          BUILD_COMMIT: ${{ github.sha }}
           PULL_REQUEST: "false"
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          KEYSTORE: ${{ secrets.KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-      - name: Sign APK
+      - name: Check Keystore Availability
+        id: check_keystore
+        run: |
+          if [ -n "${{ secrets.KEYSTORE }}" ]; then
+            echo "has_keystore=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_keystore=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Sign APK (Custom Keystore)
+        if: steps.check_keystore.outputs.has_keystore == 'true'
         uses: ilharp/sign-android-release@v2.0.0
         with:
-          releaseDir: app/build/outputs/apk/${{ matrix.variant }}/release/
+          releaseDir: app/build/outputs/apk/gms/release/
           signingKey: ${{ secrets.KEYSTORE }}
           keyAlias: ${{ secrets.KEY_ALIAS }}
           keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.KEY_PASSWORD }}
           buildToolsVersion: 36.0.0
 
-      - name: Move signed APK
-        run: |
-          OUTPUT_DIR="app/build/outputs/apk/${{ matrix.variant }}/release"
-          mkdir -p "$OUTPUT_DIR/out"
-          if [ "${{ matrix.variant }}" = "gms" ]; then
-            TARGET_NAME="app-universal-with-Google-Cast.apk"
-          else
-            TARGET_NAME="app-universal-release.apk"
-          fi
-          find "$OUTPUT_DIR" -name "*-signed.apk" -o -name "*-unsigned-signed.apk" | xargs -I{} mv {} "$OUTPUT_DIR/out/$TARGET_NAME"
+      - name: Restore Nightly Fallback Keystore
+        if: steps.check_keystore.outputs.has_keystore != 'true'
+        id: fallback_keystore_cache
+        uses: actions/cache/restore@v6
+        with:
+          path: app/build/keystore/nightly-fallback.keystore
+          key: monologue-nightly-fallback-keystore
 
-      - name: Upload Signed APK
+      - name: Generate Fallback Keystore if not cached
+        if: steps.check_keystore.outputs.has_keystore != 'true' && steps.fallback_keystore_cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p app/build/keystore
+          keytool -genkeypair -v \
+            -keystore app/build/keystore/nightly-fallback.keystore \
+            -storepass android \
+            -alias monologuenightly \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Monologue Nightly,O=Monologue,C=US"
+
+      - name: Save Fallback Keystore to cache
+        if: steps.check_keystore.outputs.has_keystore != 'true' && steps.fallback_keystore_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: app/build/keystore/nightly-fallback.keystore
+          key: monologue-nightly-fallback-keystore
+
+      - name: Prepare Fallback Keystore Base64
+        if: steps.check_keystore.outputs.has_keystore != 'true'
+        run: |
+          FALLBACK_B64=$(base64 -w 0 app/build/keystore/nightly-fallback.keystore)
+          echo "FALLBACK_KEYSTORE_B64=$FALLBACK_B64" >> $GITHUB_ENV
+
+      - name: Sign APK (Fallback Nightly Keystore)
+        if: steps.check_keystore.outputs.has_keystore != 'true'
+        uses: ilharp/sign-android-release@v2.0.0
+        with:
+          releaseDir: app/build/outputs/apk/gms/release/
+          signingKey: ${{ env.FALLBACK_KEYSTORE_B64 }}
+          keyAlias: monologuenightly
+          keyStorePassword: android
+          keyPassword: android
+          buildToolsVersion: 36.0.0
+
+      - name: Move and prepare Release APK
+        run: |
+          OUTPUT_DIR="app/build/outputs/apk/gms/release"
+          mkdir -p "$OUTPUT_DIR/out"
+          SIGNED_APK=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*-signed.apk" -o -name "*-unsigned-signed.apk" -o -name "app-gms-release.apk" 2>/dev/null | head -1 || true)
+          if [ -n "$SIGNED_APK" ] && [ -f "$SIGNED_APK" ]; then
+            cp "$SIGNED_APK" "$OUTPUT_DIR/out/Monologue-with-Google-Cast.apk"
+            cp "$SIGNED_APK" "$OUTPUT_DIR/out/Monologue-Nightly.apk"
+          else
+            echo "::error::Signed APK not found in $OUTPUT_DIR!"
+            exit 1
+          fi
+
+      - name: Verify APK Signature
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          echo "Verifying APK signature using $APKSIGNER"
+          "$APKSIGNER" verify --verbose app/build/outputs/apk/gms/release/out/Monologue-Nightly.apk
+
+      - name: Upload Release APK
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.variant == 'gms' && 'app-with-Google-Cast' || 'app-release' }}
-          path: app/build/outputs/apk/${{ matrix.variant }}/release/out/*
+          name: monologue-release
+          path: app/build/outputs/apk/gms/release/out/*
 
   build_debug:
-    name: Build Debug (${{ matrix.variant }})
+    name: Build Debug APK
     if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-
-    strategy:
-      matrix:
-        include:
-          # FOSS and Izzy differ from GMS only by ~80 lines of Cast stubs,
-          # plus the updater flag for Izzy (GMS and FOSS enable the updater,
-          # Izzy disables it). Both are still built by the release workflow,
-          # so building them nightly too doubled this workflow for almost no
-          # extra coverage.
-          - variant: gms
-            variantName: Gms
 
     steps:
       - uses: actions/checkout@v7
@@ -133,27 +176,33 @@ jobs:
         run: chmod +x gradlew
 
       - name: Restore Persistent Keystore
+        env:
+          DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
+        if: env.DEBUG_KEYSTORE != ''
         run: |
-          echo "${{ secrets.DEBUG_KEYSTORE }}" | base64 -d > ./app/persistent-debug.keystore
+          echo "$DEBUG_KEYSTORE" | base64 -d > ./app/persistent-debug.keystore
 
-      # Lint is intentionally not run in CI: it never gated a merge and added
-      # several minutes to every build. Run :app:lintGmsRelease locally.
       - name: Build Debug APK
-        run: ./gradlew --console=plain assemble${{ matrix.variantName }}Debug --warning-mode summary
+        run: ./gradlew --console=plain assembleGmsDebug --warning-mode summary
         env:
           MONOLOGUE_APPLICATION_ID: com.monologue.music
-          MONOLOGUE_APP_NAME: Metrolist Nightly
+          MONOLOGUE_APP_NAME: Monologue Nightly
           MONOLOGUE_BUILD_COMMIT: ${{ github.sha }}
+          BUILD_COMMIT: ${{ github.sha }}
           PULL_REQUEST: "false"
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          KEYSTORE: ${{ secrets.KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.variant == 'gms' && 'app-debug-gms' || 'app-debug' }}
-          path: app/build/outputs/apk/${{ matrix.variant }}/debug/*.apk
+          name: monologue-debug
+          path: app/build/outputs/apk/gms/debug/*.apk
 
   publish_nightly:
     name: Publish Nightly Release
@@ -163,10 +212,10 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Download Signed APK
+      - name: Download Release APK
         uses: actions/download-artifact@v8
         with:
-          name: app-with-Google-Cast
+          name: monologue-release
           path: nightly
 
       - name: Publish Nightly Release
@@ -174,7 +223,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          mv nightly/app-universal-with-Google-Cast.apk nightly/Metrolist-with-Google-Cast.apk
+          if [ ! -f nightly/Monologue-Nightly.apk ]; then
+            SIGNED_APK=$(find nightly -maxdepth 1 -name "*.apk" | head -1)
+            cp "$SIGNED_APK" nightly/Monologue-Nightly.apk
+          fi
 
           PREVIOUS_NIGHTLY_SHA=$(gh release view nightly --json targetCommitish --jq .targetCommitish 2>/dev/null || true)
           {
@@ -183,20 +235,21 @@ jobs:
               echo
               echo "## Changes since previous nightly"
               gh api "repos/$GITHUB_REPOSITORY/compare/$PREVIOUS_NIGHTLY_SHA...$GITHUB_SHA" \
-                --jq '.commits[] | "* \(.commit.message | split("\n")[0]) (\(.sha[0:7]))"'
+                --jq '.commits[] | "* \(.commit.message | split("\n")[0]) (\(.sha[0:7]))"' || true
             fi
           } > nightly-notes.md
 
           if gh release view nightly > /dev/null 2>&1; then
             gh release delete nightly --yes --cleanup-tag
           elif gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" > /dev/null 2>&1; then
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/nightly"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/nightly" > /dev/null 2>&1 || true
           fi
 
           gh release create nightly \
-            nightly/Metrolist-with-Google-Cast.apk \
+            nightly/Monologue-Nightly.apk \
+            nightly/Monologue-with-Google-Cast.apk \
             --target "$GITHUB_SHA" \
-            --title "Metrolist Nightly" \
+            --title "Monologue Nightly" \
             --notes-file nightly-notes.md \
             --generate-notes \
             --prerelease \

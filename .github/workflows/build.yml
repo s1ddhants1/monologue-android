@@ -206,7 +206,7 @@ jobs:
 
   publish_nightly:
     name: Publish Nightly Release
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: [build_release, build_debug]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -226,6 +226,9 @@ jobs:
           if [ ! -f nightly/Monologue-Nightly.apk ]; then
             SIGNED_APK=$(find nightly -maxdepth 1 -name "*.apk" | head -1)
             cp "$SIGNED_APK" nightly/Monologue-Nightly.apk
+          fi
+          if [ ! -f nightly/Monologue-with-Google-Cast.apk ]; then
+            cp nightly/Monologue-Nightly.apk nightly/Monologue-with-Google-Cast.apk
           fi
 
           PREVIOUS_NIGHTLY_SHA=$(gh release view nightly --json targetCommitish --jq .targetCommitish 2>/dev/null || true)

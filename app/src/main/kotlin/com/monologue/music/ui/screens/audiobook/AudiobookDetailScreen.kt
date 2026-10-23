@@ -119,11 +119,10 @@ fun AudiobookDetailScreen(
         viewModel.loadDetail(slug)
     }
 
-    // Connect ready stream to ExoPlayer playback
-    val playUri = when (val state = streamState) {
-        is TorrentStreamState.Ready -> state.streamUrl.ifEmpty { state.filePath }
-        is TorrentStreamState.Seeding -> state.filePath
-        else -> null
+    // Connect ready stream to ExoPlayer playback. Seeding must not restart playback from the
+    // local file: it uses the same data the stream already served and would reset the position.
+    val playUri = (streamState as? TorrentStreamState.Ready)?.let { state ->
+        state.streamUrl.ifEmpty { state.filePath }
     }
     val playFileIndex = (streamState as? TorrentStreamState.Ready)?.fileIndex ?: 0
     LaunchedEffect(playUri, playFileIndex) {
@@ -369,10 +368,13 @@ fun AudiobookDetailScreen(
 
                             Surface(
                                 onClick = {
-                                    if (isCurrentBook) {
-                                        playerConnection.togglePlayPause()
-                                    } else {
-                                        viewModel.streamChapter(0)
+                                    when {
+                                        isBuffering -> Unit
+                                        isCurrentBook && streamState !is TorrentStreamState.Idle &&
+                                            streamState !is TorrentStreamState.Error -> {
+                                            playerConnection.togglePlayPause()
+                                        }
+                                        else -> viewModel.streamChapter(audiobookEntity?.lastPlayChapterIndex ?: 0)
                                     }
                                 },
                                 color = MaterialTheme.colorScheme.primary,

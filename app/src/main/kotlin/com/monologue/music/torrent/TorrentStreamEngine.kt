@@ -11,17 +11,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.libtorrent4j.AddTorrentParams
 import org.libtorrent4j.AlertListener
 import org.libtorrent4j.Priority
 import org.libtorrent4j.SessionManager
 import org.libtorrent4j.SessionParams
 import org.libtorrent4j.SettingsPack
+import org.libtorrent4j.Sha1Hash
 import org.libtorrent4j.TorrentFlags
 import org.libtorrent4j.TorrentHandle
+import org.libtorrent4j.TorrentInfo
 import org.libtorrent4j.alerts.AddTorrentAlert
 import org.libtorrent4j.alerts.Alert
 import org.libtorrent4j.alerts.MetadataReceivedAlert
 import org.libtorrent4j.alerts.PieceFinishedAlert
+import org.libtorrent4j.alerts.TorrentAlert
 import org.libtorrent4j.alerts.TorrentFinishedAlert
 import org.libtorrent4j.swig.alert_category_t
 import org.libtorrent4j.swig.settings_pack
@@ -32,6 +36,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -68,12 +73,18 @@ class TorrentStreamEngine @Inject constructor(
     companion object {
         const val BUFFER_PIECES_AHEAD = 5
         const val STREAM_PORT = 19527
+
+        private val AUDIO_EXTENSIONS = listOf(
+            ".m4b", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus", ".wav", ".wma",
+        )
     }
 
     data class StreamFileInfo(
         val fileIndex: Int,
+        val chapterIndex: Int,
         val fileName: String,
         val fileSize: Long,
+        val fileOffset: Long,
         val pieceLength: Int,
         val firstPiece: Int,
         val lastPiece: Int,
@@ -81,9 +92,16 @@ class TorrentStreamEngine @Inject constructor(
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile
     private var sessionManager: SessionManager? = null
+    @Volatile
     private var currentHandle: TorrentHandle? = null
-    private var targetFileIndex: Int = 0
+    @Volatile
+    private var targetChapterIndex: Int = 0
+    @Volatile
+    private var targetFileName: String? = null
+    @Volatile
+    private var activeInfoHash: Sha1Hash? = null
     @Volatile
     private var currentFileInfo: StreamFileInfo? = null
 
@@ -91,6 +109,8 @@ class TorrentStreamEngine @Inject constructor(
     var serverPort: Int = 0
         private set
 
+    private val activeSockets = ConcurrentHashMap.newKeySet<Socket>()
+    private val activeWindowLock = Any()
     private val activeWindowPieces = mutableSetOf<Int>()
 
     private val _streamState = MutableStateFlow<TorrentStreamState>(TorrentStreamState.Idle)
@@ -102,9 +122,11 @@ class TorrentStreamEngine @Inject constructor(
     private val saveDir: File
         get() = File(context.getExternalFilesDir(null), "audiobooks").also { it.mkdirs() }
 
+    @Volatile
     private var isStarted = false
 
     private val startMutex = kotlinx.coroutines.sync.Mutex()
+    private val streamMutex = Mutex()
 
     private suspend fun ensureStarted() = withContext(Dispatchers.IO) {
         if (isStarted && sessionManager != null) return@withContext
@@ -142,13 +164,15 @@ class TorrentStreamEngine @Inject constructor(
         scope.launch {
             try {
                 stopStreamServer()
+                closeActiveStreamClients()
                 currentHandle?.let { saveResumeData(it) }
                 sessionManager?.stop()
                 sessionManager = null
                 currentHandle = null
                 currentFileInfo = null
+                activeInfoHash = null
                 isStarted = false
-                activeWindowPieces.clear()
+                synchronized(activeWindowLock) { activeWindowPieces.clear() }
                 _streamState.value = TorrentStreamState.Idle
                 _status.value = TorrentStatus()
             } catch (e: Exception) {
@@ -157,49 +181,86 @@ class TorrentStreamEngine @Inject constructor(
         }
     }
 
-    suspend fun streamFromMagnet(magnetUri: String, fileIndex: Int = 0): String? {
+    suspend fun streamFromMagnet(
+        magnetUri: String,
+        chapterIndex: Int = 0,
+        fileName: String? = null,
+    ): String? {
         ensureStarted()
         val sm = sessionManager ?: run {
             _streamState.value = TorrentStreamState.Error("Engine not started")
             return null
         }
+        val infoHash = runCatching {
+            AddTorrentParams.parseMagnetUri(magnetUri).infoHashes.best
+        }.getOrNull()
 
         return withContext(Dispatchers.IO) {
-            try {
-                stopCurrentStream()
-                targetFileIndex = fileIndex
-                _streamState.value = TorrentStreamState.Connecting
+            streamMutex.withLock {
+                try {
+                    val previousHash = activeInfoHash
+                    stopCurrentStream()
+                    // Filter alerts from the previous torrent as early as possible.
+                    activeInfoHash = infoHash
 
-                sm.download(magnetUri, saveDir, TorrentFlags.DEFAULT_DONT_DOWNLOAD)
-                _streamState.value = TorrentStreamState.FetchingMetadata
-                null
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to start stream")
-                _streamState.value = TorrentStreamState.Error("Failed to start stream: ${e.message}")
-                null
+                    if (infoHash != null && previousHash != null && previousHash != infoHash) {
+                        runCatching {
+                            sm.find(previousHash)?.let { sm.remove(it) }
+                        }
+                    }
+
+                    targetChapterIndex = chapterIndex
+                    targetFileName = fileName
+                    _streamState.value = TorrentStreamState.Connecting
+
+                    sm.download(magnetUri, saveDir, TorrentFlags.DEFAULT_DONT_DOWNLOAD)
+                    _streamState.value = TorrentStreamState.FetchingMetadata
+
+                    // Reusing a torrent that is already in the session doesn't emit add/metadata
+                    // alerts again, so initialise the new chapter explicitly.
+                    val handle = infoHash?.let { hash ->
+                        runCatching { sm.find(hash) }.getOrNull()
+                    }
+                    if (handle != null && handle.isValid) {
+                        currentHandle = handle
+                        if (getTorrentInfoSafely(handle) != null) {
+                            prioritizeFile(handle, targetChapterIndex, targetFileName)
+                            checkStreamReadiness(handle)
+                            updateBufferingIfNeeded(handle)
+                        }
+                    }
+                    null
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to start stream")
+                    _streamState.value = TorrentStreamState.Error("Failed to start stream: ${e.message}")
+                    null
+                }
             }
         }
     }
 
     fun stopCurrentStream() {
-        currentHandle?.let { handle ->
-            saveResumeData(handle)
-        }
-        currentHandle = null
+        val handle = currentHandle
+        activeInfoHash = null
         currentFileInfo = null
-        activeWindowPieces.clear()
+        currentHandle = null
+        closeActiveStreamClients()
+        handle?.let { saveResumeData(it) }
+        synchronized(activeWindowLock) { activeWindowPieces.clear() }
         _streamState.value = TorrentStreamState.Idle
     }
 
-    fun setTargetFile(index: Int) {
-        targetFileIndex = index
-        currentHandle?.let { handle ->
-            prioritizeFile(handle, index)
-            checkStreamReadiness(handle, index)
+    fun setTargetFile(chapterIndex: Int, fileName: String? = null) {
+        targetChapterIndex = chapterIndex
+        targetFileName = fileName
+        val handle = currentHandle ?: activeInfoHash?.let { sessionManager?.find(it) }
+        handle?.let {
+            prioritizeFile(it, chapterIndex, fileName)
+            checkStreamReadiness(it)
         }
     }
 
-    private fun getTorrentInfoSafely(handle: TorrentHandle?): org.libtorrent4j.TorrentInfo? {
+    private fun getTorrentInfoSafely(handle: TorrentHandle?): TorrentInfo? {
         if (handle == null || !handle.isValid) return null
         val status = try { handle.status() } catch (_: Exception) { return null }
         if (!status.hasMetadata()) return null
@@ -210,12 +271,51 @@ class TorrentStreamEngine @Inject constructor(
         }
     }
 
+    private fun isAudioFile(path: String): Boolean {
+        val lower = path.lowercase()
+        return AUDIO_EXTENSIONS.any { lower.endsWith(it) }
+    }
+
+    /**
+     * The UI only knows the audio files listed on the website, sorted by name. The torrent
+     * itself may contain artwork or other files in a different order, so the chapter index
+     * cannot be used as a torrent file index directly.
+     */
+    private fun resolveFileIndex(ti: TorrentInfo, chapterIndex: Int, fileName: String?): Int? {
+        val fs = ti.files()
+        val numFiles = ti.numFiles()
+        if (numFiles <= 0) return null
+
+        val targetName = fileName
+            ?.substringAfterLast('/')
+            ?.substringAfterLast('\\')
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+        if (targetName != null) {
+            for (i in 0 until numFiles) {
+                val path = fs.filePath(i)
+                val baseName = path.substringAfterLast('/').substringAfterLast('\\')
+                if (baseName.equals(targetName, ignoreCase = true)) return i
+            }
+            for (i in 0 until numFiles) {
+                if (fs.filePath(i).endsWith(targetName, ignoreCase = true)) return i
+            }
+        }
+
+        val audioIndices = (0 until numFiles).filter { isAudioFile(fs.filePath(it)) }
+        val candidates = audioIndices.ifEmpty { (0 until numFiles).toList() }
+        return candidates.getOrNull(chapterIndex) ?: candidates.firstOrNull()
+    }
+
     /**
      * Ignores all non-target files and unplayed pieces; pins container metadata (head + tail)
      * and initializes the sliding download window at the start of the audio file.
      */
-    private fun prioritizeFile(handle: TorrentHandle, fileIndex: Int) {
+    private fun prioritizeFile(handle: TorrentHandle, chapterIndex: Int, fileName: String?) {
+        if (!handle.isValid) return
         val ti = getTorrentInfoSafely(handle) ?: return
+        val fileIndex = resolveFileIndex(ti, chapterIndex, fileName) ?: return
         val fs = ti.files()
         val numFiles = ti.numFiles()
         if (fileIndex !in 0 until numFiles) return
@@ -224,13 +324,16 @@ class TorrentStreamEngine @Inject constructor(
         val lastPiece = fs.lastPieceIndexAtFile(fileIndex)
         val pieceLength = fs.pieceLength()
         val fileSize = fs.fileSize(fileIndex)
-        val fileName = fs.filePath(fileIndex)
+        val fileOffset = fs.fileOffset(fileIndex)
+        val torrentFileName = fs.filePath(fileIndex)
         val numPieces = ti.numPieces()
 
         currentFileInfo = StreamFileInfo(
             fileIndex = fileIndex,
-            fileName = fileName,
+            chapterIndex = chapterIndex,
+            fileName = torrentFileName,
             fileSize = fileSize,
+            fileOffset = fileOffset,
             pieceLength = pieceLength,
             firstPiece = firstPiece,
             lastPiece = lastPiece,
@@ -258,8 +361,17 @@ class TorrentStreamEngine @Inject constructor(
         handle.setPieceDeadline(lastPiece, 3000)
 
         // Open active sliding window at start of file
-        activeWindowPieces.clear()
+        synchronized(activeWindowLock) { activeWindowPieces.clear() }
         updateSlidingWindow(handle, fileIndex, startByte = 0L)
+    }
+
+    /**
+     * Torrent pieces span file boundaries, so a file offset must be translated through the
+     * file's offset in the torrent rather than divided by the piece length directly.
+     */
+    private fun pieceIndexAtFileOffset(info: StreamFileInfo, filePos: Long): Int {
+        val absoluteOffset = info.fileOffset + filePos.coerceAtLeast(0L)
+        return (absoluteOffset / info.pieceLength).toInt().coerceIn(info.firstPiece, info.lastPiece)
     }
 
     /**
@@ -272,55 +384,84 @@ class TorrentStreamEngine @Inject constructor(
 
         val firstPiece = info.firstPiece
         val lastPiece = info.lastPiece
-        val pieceLength = info.pieceLength
 
-        val pieceOffset = (startByte / pieceLength).toInt()
-        val targetPiece = (firstPiece + pieceOffset).coerceIn(firstPiece, lastPiece)
+        val targetPiece = pieceIndexAtFileOffset(info, startByte)
         val windowEnd = minOf(targetPiece + BUFFER_PIECES_AHEAD, lastPiece)
 
         val newWindow = (targetPiece..windowEnd).toSet()
         val pinned = setOf(firstPiece, minOf(firstPiece + 1, lastPiece), lastPiece)
 
-        // Reset pieces that left the active window and are not container metadata
-        for (oldPiece in activeWindowPieces) {
-            if (oldPiece !in newWindow && oldPiece !in pinned) {
-                handle.piecePriority(oldPiece, Priority.IGNORE)
-                handle.resetPieceDeadline(oldPiece)
+        synchronized(activeWindowLock) {
+            // Reset pieces that left the active window and are not container metadata
+            for (oldPiece in activeWindowPieces) {
+                if (oldPiece !in newWindow && oldPiece !in pinned) {
+                    handle.piecePriority(oldPiece, Priority.IGNORE)
+                    handle.resetPieceDeadline(oldPiece)
+                }
             }
-        }
 
-        // Prioritize pieces in the active sliding window with short deadlines
-        for (piece in newWindow) {
-            handle.piecePriority(piece, Priority.TOP_PRIORITY)
-            val deadlineMs = 1000 + (piece - targetPiece) * 1000
-            handle.setPieceDeadline(piece, deadlineMs)
-        }
+            // Prioritize pieces in the active sliding window with short deadlines
+            for (piece in newWindow) {
+                handle.piecePriority(piece, Priority.TOP_PRIORITY)
+                val deadlineMs = 1000 + (piece - targetPiece) * 1000
+                handle.setPieceDeadline(piece, deadlineMs)
+            }
 
-        activeWindowPieces.clear()
-        activeWindowPieces.addAll(newWindow)
+            activeWindowPieces.clear()
+            activeWindowPieces.addAll(newWindow)
+        }
     }
 
-    private fun checkStreamReadiness(handle: TorrentHandle, fileIndex: Int) {
-        if (!handle.isValid) return
+    private fun hasPiece(handle: TorrentHandle, piece: Int): Boolean {
+        if (!handle.isValid) return false
+        return try {
+            handle.havePiece(piece)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun isActiveHandle(handle: TorrentHandle): Boolean {
+        if (!handle.isValid) return false
+        val expected = activeInfoHash ?: return true
+        return try {
+            handle.infoHash() == expected
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun updateBufferingIfNeeded(handle: TorrentHandle) {
+        val current = _streamState.value
+        if (current is TorrentStreamState.Ready || current is TorrentStreamState.Error) return
+        val status = try { handle.status() } catch (_: Exception) { return }
+        _streamState.value = TorrentStreamState.Buffering(
+            progress = status.progress(),
+            peers = status.numPeers(),
+            downloadSpeed = status.downloadPayloadRate().toLong(),
+        )
+    }
+
+    private fun checkStreamReadiness(handle: TorrentHandle) {
+        if (!handle.isValid || !isActiveHandle(handle)) return
         val info = currentFileInfo ?: return
-        if (fileIndex != info.fileIndex) return
 
         val firstPiece = info.firstPiece
         val lastPiece = info.lastPiece
-        val filePath = getFilePath(handle, fileIndex)
+        val filePath = File(saveDir, info.fileName).absolutePath
 
         // Ready when initial playback pieces are downloaded
-        val hasHead = handle.havePiece(firstPiece)
-        val hasBuffer = (firstPiece + 1 > lastPiece) || handle.havePiece(firstPiece + 1)
+        val hasHead = hasPiece(handle, firstPiece)
+        val hasBuffer = (firstPiece + 1 > lastPiece) || hasPiece(handle, firstPiece + 1)
 
-        if (hasHead && hasBuffer && filePath != null) {
-            val streamUrl = "http://127.0.0.1:$serverPort/stream?file=$fileIndex"
-            val status = handle.status()
+        if (hasHead && hasBuffer) {
+            val streamUrl = "http://127.0.0.1:$serverPort/stream?file=${info.chapterIndex}"
+            val status = try { handle.status() } catch (_: Exception) { return }
             if (_streamState.value !is TorrentStreamState.Ready) {
                 _streamState.value = TorrentStreamState.Ready(
                     filePath = filePath,
                     streamUrl = streamUrl,
-                    fileIndex = fileIndex,
+                    fileIndex = info.chapterIndex,
                     peers = status.numPeers(),
                     downloadSpeed = status.downloadPayloadRate().toLong(),
                     uploadSpeed = status.uploadPayloadRate().toLong(),
@@ -366,7 +507,15 @@ class TorrentStreamEngine @Inject constructor(
         serverPort = 0
     }
 
+    private fun closeActiveStreamClients() {
+        activeSockets.toList().forEach { client ->
+            try { client.close() } catch (_: Exception) {}
+        }
+        activeSockets.clear()
+    }
+
     private fun handleStreamClient(socket: Socket) {
+        activeSockets.add(socket)
         try {
             val reader = socket.getInputStream().bufferedReader()
             val requestLine = reader.readLine() ?: return
@@ -390,7 +539,7 @@ class TorrentStreamEngine @Inject constructor(
 
             val info = currentFileInfo
             val handle = currentHandle
-            if (info == null || handle == null || !handle.isValid) {
+            if (info == null || handle == null || !handle.isValid || !isActiveHandle(handle)) {
                 val out = socket.getOutputStream()
                 out.write("HTTP/1.1 503 Service Unavailable\r\nRetry-After: 2\r\nConnection: close\r\n\r\n".toByteArray(Charsets.UTF_8))
                 out.flush()
@@ -405,16 +554,34 @@ class TorrentStreamEngine @Inject constructor(
             var endByte = fileSize - 1
             if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
                 val rangeVal = rangeHeader.removePrefix("bytes=").trim()
-                val parts = rangeVal.split("-")
-                if (parts.isNotEmpty() && parts[0].isNotEmpty()) {
-                    startByte = parts[0].toLongOrNull() ?: 0L
-                }
-                if (parts.size > 1 && parts[1].isNotEmpty()) {
-                    endByte = parts[1].toLongOrNull() ?: (fileSize - 1)
+                val parts = rangeVal.split("-", limit = 2)
+                val startPart = parts.getOrNull(0)?.trim().orEmpty()
+                val endPart = parts.getOrNull(1)?.trim().orEmpty()
+                if (startPart.isEmpty()) {
+                    // Suffix range: bytes=-N means the last N bytes.
+                    val suffixLength = endPart.toLongOrNull() ?: 0L
+                    startByte = (fileSize - suffixLength).coerceAtLeast(0L)
+                } else {
+                    startByte = startPart.toLongOrNull() ?: 0L
+                    if (endPart.isNotEmpty()) {
+                        endByte = endPart.toLongOrNull() ?: endByte
+                    }
                 }
             }
 
-            val contentLength = (endByte - startByte + 1).coerceAtLeast(0L)
+            if (fileSize <= 0 || startByte > fileSize - 1) {
+                val out = socket.getOutputStream()
+                val response = "HTTP/1.1 416 Range Not Satisfiable\r\n" +
+                    "Content-Range: bytes */$fileSize\r\n" +
+                    "Connection: close\r\n\r\n"
+                out.write(response.toByteArray(Charsets.UTF_8))
+                out.flush()
+                return
+            }
+            startByte = startByte.coerceIn(0L, fileSize - 1)
+            endByte = endByte.coerceIn(startByte, fileSize - 1)
+
+            val contentLength = endByte - startByte + 1
             val mimeType = when {
                 fileName.endsWith(".mp3", ignoreCase = true) -> "audio/mpeg"
                 fileName.endsWith(".m4b", ignoreCase = true) || fileName.endsWith(".m4a", ignoreCase = true) -> "audio/mp4"
@@ -439,37 +606,35 @@ class TorrentStreamEngine @Inject constructor(
             if (requestLine.startsWith("HEAD")) return
 
             // Ensure first requested piece is downloaded before attempting to read the file
-            val firstRequestedPiece = (info.firstPiece + (startByte / info.pieceLength).toInt()).coerceIn(info.firstPiece, info.lastPiece)
+            val firstRequestedPiece = pieceIndexAtFileOffset(info, startByte)
             var pieceWait = 0
-            while (!handle.havePiece(firstRequestedPiece) && !socket.isClosed && isStarted && pieceWait < 600) {
+            while (!hasPiece(handle, firstRequestedPiece) && !socket.isClosed && isStarted && pieceWait < 600) {
                 Thread.sleep(50)
                 pieceWait++
             }
-            if (!handle.havePiece(firstRequestedPiece) || socket.isClosed || !isStarted || !file.exists()) return
+            if (!hasPiece(handle, firstRequestedPiece) || socket.isClosed || !isStarted || !file.exists()) return
 
             RandomAccessFile(file, "r").use { raf ->
                 val buffer = ByteArray(64 * 1024)
                 var currentPos = startByte
                 val pieceLength = info.pieceLength
-                val firstPiece = info.firstPiece
-                val lastPiece = info.lastPiece
 
-                while (currentPos <= endByte && !socket.isClosed && isStarted) {
-                    val pieceOffset = (currentPos / pieceLength).toInt()
-                    val pieceIndex = (firstPiece + pieceOffset).coerceIn(firstPiece, lastPiece)
+                while (currentPos <= endByte && !socket.isClosed && isStarted && handle.isValid) {
+                    val pieceIndex = pieceIndexAtFileOffset(info, currentPos)
 
                     updateSlidingWindow(handle, info.fileIndex, currentPos)
 
                     var pieceWait = 0
-                    while (!handle.havePiece(pieceIndex) && !socket.isClosed && isStarted && pieceWait < 600) {
+                    while (!hasPiece(handle, pieceIndex) && !socket.isClosed && isStarted && pieceWait < 600) {
                         Thread.sleep(50)
                         pieceWait++
                     }
-                    if (!handle.havePiece(pieceIndex) || socket.isClosed || !isStarted) break
+                    if (!hasPiece(handle, pieceIndex) || socket.isClosed || !isStarted) break
 
-                    val pieceFileStart = pieceOffset.toLong() * pieceLength
-                    val pieceFileEnd = minOf(pieceFileStart + pieceLength, fileSize)
-                    val chunkEnd = minOf(endByte + 1, pieceFileEnd)
+                    val absolutePos = info.fileOffset + currentPos
+                    val pieceStartAbsolute = (absolutePos / pieceLength) * pieceLength
+                    val pieceEndAbsolute = pieceStartAbsolute + pieceLength
+                    val chunkEnd = minOf(endByte + 1, pieceEndAbsolute - info.fileOffset)
                     var bytesRemaining = (chunkEnd - currentPos).toInt()
 
                     raf.seek(currentPos)
@@ -489,6 +654,7 @@ class TorrentStreamEngine @Inject constructor(
         } catch (e: Exception) {
             Timber.d("Stream client exception: ${e.message}")
         } finally {
+            activeSockets.remove(socket)
             try { socket.close() } catch (_: Exception) {}
         }
     }
@@ -501,15 +667,23 @@ class TorrentStreamEngine @Inject constructor(
         }
     }
 
-    private fun getFilePath(handle: TorrentHandle, fileIndex: Int): String? {
-        val info = currentFileInfo
-        if (info != null && info.fileIndex == fileIndex) {
-            return File(saveDir, info.fileName).absolutePath
+    /**
+     * Alert-owned handles point into native alert memory and become dangling as soon as the
+     * alert is destroyed, so always resolve a session-owned handle for the active info hash.
+     */
+    private fun handleForHash(hash: Sha1Hash?): TorrentHandle? {
+        val expected = activeInfoHash ?: return null
+        if (hash == null || hash != expected) return null
+        return try {
+            sessionManager?.find(hash)?.takeIf { it.isValid }
+        } catch (_: Exception) {
+            null
         }
-        val ti = getTorrentInfoSafely(handle) ?: return null
-        if (fileIndex !in 0 until ti.numFiles()) return null
-        val fileName = ti.files().filePath(fileIndex)
-        return File(saveDir, fileName).absolutePath
+    }
+
+    private fun handleForAlert(alert: TorrentAlert<*>): TorrentHandle? {
+        val hash = try { alert.handle().infoHash() } catch (_: Exception) { null }
+        return handleForHash(hash)
     }
 
     private val alertListener = object : AlertListener {
@@ -518,32 +692,37 @@ class TorrentStreamEngine @Inject constructor(
         override fun alert(alert: Alert<*>?) {
             when (alert) {
                 is AddTorrentAlert -> {
+                    val hash = runCatching { alert.params().infoHashes.best }.getOrNull()
+                        ?: runCatching { alert.handle().infoHash() }.getOrNull()
+
+                    if (hash != null && hash != activeInfoHash) return
+
                     if (alert.error().isError) {
                         _streamState.value = TorrentStreamState.Error("Failed to add torrent: ${alert.error().message}")
                         return
                     }
-                    val handle = alert.handle()
+
+                    val handle = handleForHash(hash) ?: return
                     currentHandle = handle
                     val ti = getTorrentInfoSafely(handle)
                     if (ti != null) {
-                        prioritizeFile(handle, targetFileIndex)
-                        checkStreamReadiness(handle, targetFileIndex)
+                        prioritizeFile(handle, targetChapterIndex, targetFileName)
+                        checkStreamReadiness(handle)
+                        updateBufferingIfNeeded(handle)
                     }
                 }
 
                 is MetadataReceivedAlert -> {
-                    val handle = alert.handle()
+                    val handle = handleForAlert(alert) ?: return
                     currentHandle = handle
-                    prioritizeFile(handle, targetFileIndex)
-                    checkStreamReadiness(handle, targetFileIndex)
-                    if (_streamState.value !is TorrentStreamState.Ready) {
-                        _streamState.value = TorrentStreamState.Buffering(progress = 0f, peers = 0, downloadSpeed = 0)
-                    }
+                    prioritizeFile(handle, targetChapterIndex, targetFileName)
+                    checkStreamReadiness(handle)
+                    updateBufferingIfNeeded(handle)
                 }
 
                 is PieceFinishedAlert -> {
-                    val handle = alert.handle()
-                    val status = handle.status()
+                    val handle = handleForAlert(alert) ?: return
+                    val status = try { handle.status() } catch (_: Exception) { return }
                     val progress = status.progress()
                     val peers = status.numPeers()
                     val dlSpeed = status.downloadPayloadRate().toLong()
@@ -558,7 +737,7 @@ class TorrentStreamEngine @Inject constructor(
                         state = _streamState.value,
                     )
 
-                    checkStreamReadiness(handle, targetFileIndex)
+                    checkStreamReadiness(handle)
                     when (val current = _streamState.value) {
                         is TorrentStreamState.Ready -> {
                             _streamState.value = current.copy(
@@ -567,27 +746,26 @@ class TorrentStreamEngine @Inject constructor(
                                 uploadSpeed = ulSpeed,
                             )
                         }
-                        !is TorrentStreamState.Seeding -> {
+                        is TorrentStreamState.Error, is TorrentStreamState.Seeding -> {}
+                        else -> {
                             _streamState.value = TorrentStreamState.Buffering(
                                 progress = progress,
                                 peers = peers,
                                 downloadSpeed = dlSpeed,
                             )
                         }
-                        else -> {}
                     }
                 }
 
                 is TorrentFinishedAlert -> {
-                    val handle = alert.handle()
-                    val info = currentFileInfo
+                    val handle = handleForAlert(alert) ?: return
+                    val info = currentFileInfo ?: return
                     // Only transition to Seeding when all pieces of target file are actually completed
-                    val isTargetFileComplete = info != null && (info.firstPiece..info.lastPiece).all { handle.havePiece(it) }
+                    val isTargetFileComplete = (info.firstPiece..info.lastPiece).all { hasPiece(handle, it) }
                     if (isTargetFileComplete) {
-                        val status = handle.status()
-                        val filePath = getFilePath(handle, targetFileIndex) ?: ""
+                        val status = try { handle.status() } catch (_: Exception) { return }
                         _streamState.value = TorrentStreamState.Seeding(
-                            filePath = filePath,
+                            filePath = File(saveDir, info.fileName).absolutePath,
                             peers = status.numPeers(),
                             uploadSpeed = status.uploadPayloadRate().toLong(),
                             ratio = if (status.allTimeDownload() > 0) status.allTimeUpload().toFloat() / status.allTimeDownload() else 0f,

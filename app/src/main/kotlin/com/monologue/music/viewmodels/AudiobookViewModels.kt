@@ -189,12 +189,14 @@ class AudiobookDetailViewModel @Inject constructor(
     fun streamChapter(fileIndex: Int = 0) {
         val detail = _detail.value ?: return
         if (detail.magnetUri.isEmpty()) return
+        val safeIndex = fileIndex.coerceIn(0, (detail.files.size - 1).coerceAtLeast(0))
+        val fileName = detail.files.getOrNull(safeIndex)?.name
         viewModelScope.launch(Dispatchers.IO) {
-            torrentEngine.streamFromMagnet(detail.magnetUri, fileIndex)
+            torrentEngine.streamFromMagnet(detail.magnetUri, safeIndex, fileName)
             database.upsert(
                 (database.audiobookEntity(detail.id) ?: return@launch).copy(
                     lastPlayedAt = LocalDateTime.now(),
-                    lastPlayChapterIndex = fileIndex,
+                    lastPlayChapterIndex = safeIndex,
                 )
             )
         }

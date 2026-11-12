@@ -1,6 +1,6 @@
 /**
- * Metrolist Project (C) 2026
- * Licensed under GPL-3.0 | See git history for contributors
+ * Monologue Audiobook Player
+ * Licensed under GPL-3.0
  */
 
 package com.monologue.music.viewmodels
@@ -8,21 +8,14 @@ package com.monologue.music.viewmodels
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.monologue.music.constants.HideVideoSongsKey
 import com.monologue.music.db.MusicDatabase
-import com.monologue.music.db.entities.Album
-import com.monologue.music.db.entities.Artist
-import com.monologue.music.db.entities.LocalItem
-import com.monologue.music.db.entities.Playlist
-import com.monologue.music.db.entities.Song
-import com.monologue.music.utils.dataStore
+import com.monologue.music.db.entities.AudiobookEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -38,79 +31,46 @@ constructor(
     database: MusicDatabase,
 ) : ViewModel() {
     val query = MutableStateFlow("")
-    val filter = MutableStateFlow(LocalFilter.ALL)
+    val filter = MutableStateFlow(LocalAudiobookFilter.ALL)
 
     val result =
         combine(
             query,
             filter,
-            context.dataStore.data.map { it[HideVideoSongsKey] ?: false }.distinctUntilChanged()
-        ) { query, filter, hideVideoSongs ->
-            Triple(query, filter, hideVideoSongs)
-        }.flatMapLatest { (query, filter, hideVideoSongs) ->
-            if (query.isEmpty()) {
-                flowOf(LocalSearchResult("", filter, emptyMap()))
+        ) { q, f ->
+            q to f
+        }.flatMapLatest { (q, f) ->
+            if (q.isEmpty()) {
+                flowOf(LocalAudiobookSearchResult("", f, emptyList()))
             } else {
-                when (filter) {
-                    LocalFilter.ALL ->
-                        combine(
-                            database.searchSongs(query, PREVIEW_SIZE),
-                            database.searchAlbums(query, PREVIEW_SIZE),
-                            database.searchArtists(query, PREVIEW_SIZE),
-                            database.searchPlaylists(query, PREVIEW_SIZE),
-                        ) { songs, albums, artists, playlists ->
-                            val filteredSongs = if (hideVideoSongs) songs.filter { !it.song.isVideo } else songs
-                            val localSongs = filteredSongs.map { it }
-                            val localAlbums = albums.map { it }
-                            val localArtists = artists.map { it }
-                            val localPlaylists = playlists.map { it }
-                            localSongs + localAlbums + localArtists + localPlaylists
-                        }
-
-                    LocalFilter.SONG -> database.searchSongs(query).map { songs ->
-                        if (hideVideoSongs) songs.filter { !it.song.isVideo } else songs
+                database.searchAudiobooks(q).map { list ->
+                    val filtered = when (f) {
+                        LocalAudiobookFilter.ALL -> list
+                        LocalAudiobookFilter.DOWNLOADED -> list.filter { it.downloadPath != null }
+                        LocalAudiobookFilter.BOOKMARKED -> list.filter { it.bookmarkedAt != null }
                     }
-                    LocalFilter.ALBUM -> database.searchAlbums(query)
-                    LocalFilter.ARTIST -> database.searchArtists(query)
-                    LocalFilter.PLAYLIST -> database.searchPlaylists(query)
-                }.map { list ->
-                    LocalSearchResult(
-                        query = query,
-                        filter = filter,
-                        map =
-                        list.groupBy {
-                            when (it) {
-                                is Song -> LocalFilter.SONG
-                                is Album -> LocalFilter.ALBUM
-                                is Artist -> LocalFilter.ARTIST
-                                is Playlist -> LocalFilter.PLAYLIST
-                                is com.monologue.music.db.entities.AudiobookItem -> LocalFilter.ALL
-                            }
-                        },
+                    LocalAudiobookSearchResult(
+                        query = q,
+                        filter = f,
+                        items = filtered,
                     )
                 }
             }
         }.stateIn(
             viewModelScope,
             SharingStarted.Lazily,
-            LocalSearchResult("", filter.value, emptyMap())
+            LocalAudiobookSearchResult("", filter.value, emptyList())
         )
-
-    companion object {
-        const val PREVIEW_SIZE = 3
-    }
 }
 
-enum class LocalFilter {
+enum class LocalAudiobookFilter {
     ALL,
-    SONG,
-    ALBUM,
-    ARTIST,
-    PLAYLIST,
+    DOWNLOADED,
+    BOOKMARKED,
 }
 
-data class LocalSearchResult(
+data class LocalAudiobookSearchResult(
     val query: String,
-    val filter: LocalFilter,
-    val map: Map<LocalFilter, List<LocalItem>>,
+    val filter: LocalAudiobookFilter,
+    val items: List<AudiobookEntity>,
 )

@@ -38,13 +38,30 @@ class AudiobookSearchViewModel @Inject constructor(
     private val _currentPage = MutableStateFlow(1)
     private val _totalPages = MutableStateFlow(1)
     val totalPages: StateFlow<Int> = _totalPages
+    private var currentQuery = ""
 
     fun search(query: String, page: Int = 1) {
+        currentQuery = query
         viewModelScope.launch(Dispatchers.IO) {
             _isLoading.value = true
             runCatching {
                 val result = client.searchAudiobooks(query, page)
                 _results.value = result.results
+                _currentPage.value = result.page
+                _totalPages.value = result.totalPages
+            }
+            _isLoading.value = false
+        }
+    }
+
+    fun loadMore() {
+        if (_isLoading.value || _currentPage.value >= _totalPages.value || currentQuery.isBlank()) return
+        val nextPage = _currentPage.value + 1
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoading.value = true
+            runCatching {
+                val result = client.searchAudiobooks(currentQuery, nextPage)
+                _results.value = (_results.value + result.results).distinctBy { it.id }
                 _currentPage.value = result.page
                 _totalPages.value = result.totalPages
             }

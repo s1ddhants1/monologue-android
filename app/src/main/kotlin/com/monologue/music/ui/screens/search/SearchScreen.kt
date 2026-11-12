@@ -52,8 +52,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.SavedStateHandle
 import com.monologue.music.LocalNavController
-import com.monologue.innertube.models.WatchEndpoint
-import com.monologue.innertube.utils.YouTubeUrlParser
 import com.monologue.music.LocalDatabase
 import com.monologue.music.LocalIsPlayerExpanded
 import com.monologue.music.LocalPlayerAwareWindowInsets
@@ -63,8 +61,6 @@ import com.monologue.music.constants.PauseSearchHistoryKey
 import com.monologue.music.constants.SearchSource
 import com.monologue.music.constants.SearchSourceKey
 import com.monologue.music.db.entities.SearchHistory
-import com.monologue.music.playback.queues.YouTubeQueue
-import com.monologue.music.ui.component.HideOnScrollFAB
 import com.monologue.music.utils.SearchRoutes
 import com.monologue.music.utils.rememberEnumPreference
 import com.monologue.music.utils.rememberPreference
@@ -136,32 +132,7 @@ fun SearchScreen(
         }
 
         focusManager.clearFocus()
-
-        when (val parsedUrl = YouTubeUrlParser.parse(searchQuery)) {
-            is YouTubeUrlParser.ParsedUrl.Video -> {
-                playerConnection?.playQueue(
-                    YouTubeQueue(
-                        WatchEndpoint(videoId = parsedUrl.id),
-                    ),
-                )
-            }
-
-            is YouTubeUrlParser.ParsedUrl.Playlist -> {
-                navController.navigate("online_playlist/${parsedUrl.id}")
-            }
-
-            is YouTubeUrlParser.ParsedUrl.Album -> {
-                navController.navigate("album/MPREb_${parsedUrl.id}")
-            }
-
-            is YouTubeUrlParser.ParsedUrl.Artist -> {
-                navController.navigate("artist/${parsedUrl.id}")
-            }
-
-            null -> {
-                navController.navigate(SearchRoutes.resultRoute(searchQuery))
-            }
-        }
+        navController.navigate(SearchRoutes.resultRoute(searchQuery))
 
         if (!pauseSearchHistory) {
             coroutineScope.launch(Dispatchers.IO) {
@@ -205,7 +176,7 @@ fun SearchScreen(
                                             stringResource(
                                                 when (searchSource) {
                                                     SearchSource.LOCAL -> R.string.search_library
-                                                    SearchSource.ONLINE -> R.string.search_yt_music
+                                                    SearchSource.ONLINE -> R.string.search_audiobooks
                                                 },
                                             ),
                                         style =
@@ -251,7 +222,7 @@ fun SearchScreen(
                                     painter =
                                         painterResource(
                                             when (searchSource) {
-                                                SearchSource.LOCAL -> R.drawable.library_music
+                                                SearchSource.LOCAL -> R.drawable.storage
                                                 SearchSource.ONLINE -> R.drawable.language
                                             },
                                         ),
@@ -304,12 +275,6 @@ fun SearchScreen(
                     )
                 }
             }
-
-            HideOnScrollFAB(
-                lazyListState = lazyListState,
-                icon = R.drawable.mic,
-                onClick = { navController.navigate("recognition") },
-            )
         }
     }
 

@@ -1,25 +1,19 @@
 /**
- * Metrolist Project (C) 2026
- * Licensed under GPL-3.0 | See git history for contributors
+ * Monologue Audiobook Player
+ * Licensed under GPL-3.0
  */
 
 package com.monologue.music.ui.screens.search
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,48 +21,29 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.monologue.music.LocalNavController
-import com.monologue.music.LocalPlayerConnection
 import com.monologue.music.R
-import com.monologue.music.constants.CONTENT_TYPE_LIST
-import com.monologue.music.constants.ListItemHeight
-import com.monologue.music.db.entities.Album
-import com.monologue.music.db.entities.Artist
-import com.monologue.music.db.entities.AudiobookItem
-import com.monologue.music.db.entities.Playlist
-import com.monologue.music.db.entities.Song
-import com.monologue.music.extensions.toMediaItem
-import com.monologue.music.playback.queues.ListQueue
-import com.monologue.music.ui.component.AlbumListItem
-import com.monologue.music.ui.component.ArtistListItem
 import com.monologue.music.ui.component.AudiobookListItem
 import com.monologue.music.ui.component.ChipsRow
 import com.monologue.music.ui.component.EmptyPlaceholder
 import com.monologue.music.ui.component.LocalMenuState
-import com.monologue.music.ui.component.PlaylistListItem
-import com.monologue.music.ui.component.SongListItem
-import com.monologue.music.ui.menu.SongMenu
-import com.monologue.music.viewmodels.LocalFilter
+import com.monologue.music.ui.menu.AudiobookMenu
+import com.monologue.music.viewmodels.LocalAudiobookFilter
 import com.monologue.music.viewmodels.LocalSearchViewModel
 import kotlinx.coroutines.flow.drop
+import java.net.URLEncoder
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -80,13 +55,8 @@ fun LocalSearchScreen(
     viewModel: LocalSearchViewModel = hiltViewModel(),
 ) {
     val navController = LocalNavController.current
-    val queueSearchedSongsStr = stringResource(R.string.queue_searched_songs)
     val keyboardController = LocalSoftwareKeyboardController.current
     val menuState = LocalMenuState.current
-    val playerConnection = LocalPlayerConnection.current ?: return
-
-    val isPlaying by playerConnection.isEffectivelyPlaying.collectAsStateWithLifecycle()
-    val mediaMetadata by playerConnection.mediaMetadata.collectAsStateWithLifecycle()
 
     val searchFilter by viewModel.filter.collectAsStateWithLifecycle()
     val result by viewModel.result.collectAsStateWithLifecycle()
@@ -112,7 +82,7 @@ fun LocalSearchScreen(
         modifier =
             Modifier
                 .fillMaxSize()
-                .background(if (pureBlack) Color.Black else MaterialTheme.colorScheme.background)
+                .background(if (pureBlack) Color.Black else androidx.compose.material3.MaterialTheme.colorScheme.background)
                 .let { base ->
                     if (isLandscape) {
                         base.windowInsetsPadding(
@@ -126,11 +96,9 @@ fun LocalSearchScreen(
         ChipsRow(
             chips =
                 listOf(
-                    LocalFilter.ALL to stringResource(R.string.filter_all),
-                    LocalFilter.SONG to stringResource(R.string.filter_songs),
-                    LocalFilter.ALBUM to stringResource(R.string.filter_albums),
-                    LocalFilter.ARTIST to stringResource(R.string.filter_artists),
-                    LocalFilter.PLAYLIST to stringResource(R.string.filter_playlists),
+                    LocalAudiobookFilter.ALL to stringResource(R.string.audiobook_all),
+                    LocalAudiobookFilter.DOWNLOADED to stringResource(R.string.downloaded),
+                    LocalAudiobookFilter.BOOKMARKED to stringResource(R.string.bookmarked),
                 ),
             currentValue = searchFilter,
             onValueUpdate = { viewModel.filter.value = it },
@@ -144,171 +112,54 @@ fun LocalSearchScreen(
                     .only(WindowInsetsSides.Bottom)
                     .asPaddingValues(),
         ) {
-            result.map.forEach { (filter, items) ->
-                if (result.filter == LocalFilter.ALL) {
-                    item(key = filter) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(ListItemHeight)
-                                    .clickable { viewModel.filter.value = filter }
-                                    .padding(start = 12.dp, end = 18.dp),
+            items(
+                items = result.items,
+                key = { "local_audiobook_${it.id}" },
+            ) { item ->
+                AudiobookListItem(
+                    audiobook = item,
+                    trailingContent = {
+                        IconButton(
+                            onClick = {
+                                menuState.show {
+                                    AudiobookMenu(
+                                        audiobook = item,
+                                        onDismiss = menuState::dismiss,
+                                    )
+                                }
+                            },
                         ) {
-                            Text(
-                                text =
-                                    stringResource(
-                                        when (filter) {
-                                            LocalFilter.SONG -> R.string.filter_songs
-                                            LocalFilter.ALBUM -> R.string.filter_albums
-                                            LocalFilter.ARTIST -> R.string.filter_artists
-                                            LocalFilter.PLAYLIST -> R.string.filter_playlists
-                                            LocalFilter.ALL -> error("")
-                                        },
-                                    ),
-                                style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.weight(1f),
-                            )
-
                             Icon(
-                                painter = painterResource(R.drawable.navigate_next),
+                                painter = painterResource(R.drawable.more_vert),
                                 contentDescription = null,
                             )
                         }
-                    }
-                }
-
-                items(
-                    items = items.distinctBy { it.id },
-                    key = { "search_local_${it.id}" },
-                    contentType = { CONTENT_TYPE_LIST },
-                ) { item ->
-                    when (item) {
-                        is Song -> {
-                            SongListItem(
-                                song = item,
-                                showInLibraryIcon = true,
-                                isActive = item.id == mediaMetadata?.id,
-                                isPlaying = isPlaying,
-                                trailingContent = {
-                                    IconButton(
-                                        onClick = {
-                                            menuState.show {
-                                                SongMenu(
-                                                    originalSong = item,
-                                                    onDismiss = {
-                                                        onDismiss()
-                                                        menuState.dismiss()
-                                                    },
-                                                    isFromCache = isFromCache,
-                                                )
-                                            }
-                                        },
-                                    ) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.more_vert),
-                                            contentDescription = null,
+                    },
+                    modifier =
+                        Modifier
+                            .combinedClickable(
+                                onClick = {
+                                    onDismiss()
+                                    val encoded = URLEncoder.encode(item.id, "UTF-8")
+                                    navController.navigate("audiobook/$encoded")
+                                },
+                                onLongClick = {
+                                    menuState.show {
+                                        AudiobookMenu(
+                                            audiobook = item,
+                                            onDismiss = menuState::dismiss,
                                         )
                                     }
                                 },
-                                modifier =
-                                    Modifier
-                                        .combinedClickable(
-                                            onClick = {
-                                                if (item.id == mediaMetadata?.id) {
-                                                    playerConnection.togglePlayPause()
-                                                } else {
-                                                    val songs =
-                                                        result.map
-                                                            .getOrDefault(LocalFilter.SONG, emptyList())
-                                                            .filterIsInstance<Song>()
-                                                            .map { it.toMediaItem() }
-                                                    playerConnection.playQueue(
-                                                        ListQueue(
-                                                            title = queueSearchedSongsStr,
-                                                            items = songs,
-                                                            startIndex = songs.indexOfFirst { it.mediaId == item.id },
-                                                        ),
-                                                    )
-                                                }
-                                            },
-                                            onLongClick = {
-                                                menuState.show {
-                                                    SongMenu(
-                                                        originalSong = item,
-                                                        onDismiss = {
-                                                            onDismiss()
-                                                            menuState.dismiss()
-                                                        },
-                                                        isFromCache = isFromCache,
-                                                    )
-                                                }
-                                            },
-                                        ).animateItem(),
-                            )
-                        }
-
-                        is Album -> {
-                            AlbumListItem(
-                                album = item,
-                                isActive = item.id == mediaMetadata?.album?.id,
-                                isPlaying = isPlaying,
-                                modifier =
-                                    Modifier
-                                        .clickable {
-                                            onDismiss()
-                                            navController.navigate("album/${item.id}")
-                                        }.animateItem(),
-                            )
-                        }
-
-                        is Artist -> {
-                            ArtistListItem(
-                                artist = item,
-                                modifier =
-                                    Modifier
-                                        .clickable {
-                                            onDismiss()
-                                            navController.navigate("artist/${item.id}")
-                                        }.animateItem(),
-                            )
-                        }
-
-                        is Playlist -> {
-                            PlaylistListItem(
-                                playlist = item,
-                                modifier =
-                                    Modifier
-                                        .clickable {
-                                            onDismiss()
-                                            navController.navigate("local_playlist/${item.id}")
-                                        }.animateItem(),
-                            )
-                        }
-
-                        is AudiobookItem -> {
-                            AudiobookListItem(
-                                audiobook = item.audiobook,
-                                modifier =
-                                    Modifier
-                                        .clickable {
-                                            onDismiss()
-                                            val encoded = java.net.URLEncoder.encode(item.audiobook.id, "UTF-8")
-                                            navController.navigate("audiobook/$encoded")
-                                        }.animateItem(),
-                            )
-                        }
-                    }
-                }
+                            ).animateItem(),
+                )
             }
 
-            if (result.query.isNotEmpty() && result.map.isEmpty()) {
+            if (result.query.isNotEmpty() && result.items.isEmpty()) {
                 item(key = "no_result") {
                     EmptyPlaceholder(
                         icon = R.drawable.search,
-                        text = stringResource(R.string.no_results_found),
+                        text = stringResource(R.string.no_audiobooks_found),
                     )
                 }
             }

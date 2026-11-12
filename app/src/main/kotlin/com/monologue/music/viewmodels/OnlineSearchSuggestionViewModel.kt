@@ -1,6 +1,6 @@
 /**
- * Metrolist Project (C) 2026
- * Licensed under GPL-3.0 | See git history for contributors
+ * Monologue Audiobook Player
+ * Licensed under GPL-3.0
  */
 
 package com.monologue.music.viewmodels
@@ -8,22 +8,8 @@ package com.monologue.music.viewmodels
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.monologue.innertube.YouTube
-import com.monologue.innertube.models.AlbumItem
-import com.monologue.innertube.models.ArtistItem
-import com.monologue.innertube.models.PlaylistItem
-import com.monologue.innertube.models.SongItem
-import com.monologue.innertube.models.WatchEndpoint
-import com.monologue.innertube.models.YTItem
-import com.monologue.innertube.models.filterExplicit
-import com.monologue.innertube.models.filterVideoSongs
-import com.monologue.innertube.utils.YouTubeUrlParser
-import com.monologue.music.constants.HideExplicitKey
-import com.monologue.music.constants.HideVideoSongsKey
 import com.monologue.music.db.MusicDatabase
 import com.monologue.music.db.entities.SearchHistory
-import com.monologue.music.utils.dataStore
-import com.monologue.music.utils.get
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -57,115 +43,21 @@ class OnlineSearchSuggestionViewModel
                                 )
                             }
                         } else {
-                            // Check if query is a YouTube URL
-                            val parsedUrl = YouTubeUrlParser.parse(query)
-                            if (parsedUrl != null) {
-                                // Fetch content from YouTube URL
-                                val parsedItem = fetchParsedUrlItem(parsedUrl)
-                                database
-                                    .searchHistory(query)
-                                    .map { it.take(3) }
-                                    .map { history ->
-                                        SearchSuggestionViewState(
-                                            history = history,
-                                            suggestions = emptyList(),
-                                            items = parsedItem?.let { listOf(it) } ?: emptyList(),
-                                            parsedUrlItem = parsedItem,
-                                            isUrlQuery = true,
-                                        )
-                                    }
-                            } else {
-                                val result = YouTube.searchSuggestions(query).getOrNull()
-                                val hideExplicit = context.dataStore.get(HideExplicitKey, false)
-                                val hideVideoSongs = context.dataStore.get(HideVideoSongsKey, false)
-
-                                database
-                                    .searchHistory(query)
-                                    .map { it.take(3) }
-                                    .map { history ->
-                                        SearchSuggestionViewState(
-                                            history = history,
-                                            suggestions =
-                                                result
-                                                    ?.queries
-                                                    ?.filter { suggestionQuery ->
-                                                        history.none { it.query == suggestionQuery }
-                                                    }.orEmpty(),
-                                            items =
-                                                result
-                                                    ?.recommendedItems
-                                                    ?.distinctBy { it.id }
-                                                    ?.filterExplicit(hideExplicit)
-                                                    ?.filterVideoSongs(hideVideoSongs)
-                                                    .orEmpty(),
-                                        )
-                                    }
-                            }
+                            database
+                                .searchHistory(query)
+                                .map { history ->
+                                    SearchSuggestionViewState(
+                                        history = history.take(10),
+                                    )
+                                }
                         }
                     }.collect {
                         _viewState.value = it
                     }
             }
         }
-
-        private suspend fun fetchParsedUrlItem(parsedUrl: YouTubeUrlParser.ParsedUrl): YTItem? =
-            when (parsedUrl) {
-                is YouTubeUrlParser.ParsedUrl.Video -> {
-                    // Use next() to get the song details from a video ID
-                    YouTube
-                        .next(WatchEndpoint(videoId = parsedUrl.id))
-                        .getOrNull()
-                        ?.items
-                        ?.firstOrNull()
-                }
-
-                is YouTubeUrlParser.ParsedUrl.Playlist -> {
-                    // Fetch playlist details
-                    YouTube
-                        .playlist(parsedUrl.id)
-                        .getOrNull()
-                        ?.playlist
-                }
-
-                is YouTubeUrlParser.ParsedUrl.Album -> {
-                    // For albums, we need to get the browseId from the playlist
-                    // First, try to get the album page
-                    val albumResult = YouTube.album("MPREb_${parsedUrl.id}")
-                    if (albumResult.isSuccess) {
-                        albumResult.getOrNull()?.album
-                    } else {
-                        // If that fails, treat it as a playlist
-                        YouTube
-                            .playlist(parsedUrl.id)
-                            .getOrNull()
-                            ?.playlist
-                    }
-                }
-
-                is YouTubeUrlParser.ParsedUrl.Artist -> {
-                    // Fetch artist details
-                    if (parsedUrl.id.startsWith("MPRE")) {
-                        // It's a browse ID
-                        YouTube
-                            .artist(parsedUrl.id)
-                            .getOrNull()
-                            ?.artist
-                    } else {
-                        // It's a channel ID, we need to find the browse ID
-                        // For now, try using the channel ID as browse ID
-                        YouTube
-                            .artist(parsedUrl.id)
-                            .getOrNull()
-                            ?.artist
-                    }
-                }
-            }
     }
 
 data class SearchSuggestionViewState(
     val history: List<SearchHistory> = emptyList(),
-    val suggestions: List<String> = emptyList(),
-    val items: List<YTItem> = emptyList(),
-    val parsedUrlItem: YTItem? = null,
-    val isUrlQuery: Boolean = false,
 )

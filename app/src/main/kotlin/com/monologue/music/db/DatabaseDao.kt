@@ -2069,6 +2069,9 @@ interface DatabaseDao {
     @Query("SELECT * FROM audiobook WHERE bookmarkedAt IS NOT NULL OR lastPlayedAt IS NOT NULL OR downloadPath IS NOT NULL ORDER BY COALESCE(bookmarkedAt, lastPlayedAt) DESC")
     fun libraryAudiobooks(): Flow<List<AudiobookEntity>>
 
+    @Query("SELECT * FROM audiobook WHERE title LIKE '%' || :query || '%' OR author LIKE '%' || :query || '%' OR narrator LIKE '%' || :query || '%' ORDER BY COALESCE(bookmarkedAt, lastPlayedAt) DESC")
+    fun searchAudiobooks(query: String): Flow<List<AudiobookEntity>>
+
     @Upsert
     fun upsert(audiobook: AudiobookEntity)
 

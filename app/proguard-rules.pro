@@ -195,3 +195,12 @@
 -keepclasseswithmembers class com.monologue.shazamkit.models.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
+
+## libtorrent4j SWIG and JNI
+-keep class org.libtorrent4j.** { *; }
+-keepclassmembers class org.libtorrent4j.** { *; }
+-keepclasseswithmembernames,includedescriptorclasses class org.libtorrent4j.** {
+    native <methods>;
+}
+-dontwarn org.libtorrent4j.**
+
